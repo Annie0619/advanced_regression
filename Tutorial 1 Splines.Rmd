@@ -1,0 +1,368 @@
+---
+title: "Tutorial 1: Splines"
+author: "Andomei Smit: SMTAND051"
+date: "14/04/2025"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 2
+    fig_caption: true
+    keep_tex: yes
+---
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.pos = 'H')
+```
+
+# Question 1
+
+## Simulate data
+
+```{r}
+rm(list = ls())
+set.seed(1)
+x_i <- runif(100) # x ~ U(0,1)
+# define u_i
+u_i <- 5 + sin(3*pi*(x_i-0.6))
+
+# define y_i
+y_i <- rnorm(100, mean = u_i, sd = 0.5)
+
+plot(x_i, y_i)
+```
+Now, we will:
+1. Define the basis functions
+2. Define X
+3. Plot the basis functions
+4. Fit the basis functions to the data and plot
+
+### Define the basis functions
+### Define X
+### Plot the basis functions
+### Fit the basis functions to the data and plot
+
+## Piecewise Constant
+
+### Define the basis functions
+Piecewise constant has one basis function: 1. This allows us to fit 3 different means in each of the sections. More specifically,
+
+$$
+B_j(x)=\begin{cases}
+1, & \text{if } x \in [t_{j-1}, t_j) \\
+0, & \text{otherwise}
+\end{cases}
+\quad \text{for } j = 1, 2
+$$
+and for the last knot we have
+
+$$
+B_3(x) =
+\begin{cases}
+1, & \text{if } x \in [t_{2}, t_3] \\
+0, & \text{otherwise}
+\end{cases}
+$$
+
+We also have
+$$
+t_1 = 0.33,\  t_2 = 0.66,\ t_3 =1
+$$
+although $t_3$ is not technically a knot, but rather an endpoint.
+
+### Define X
+```{r}
+# X will be a 100x3 matrix. 
+## for 0<=x<0.33 column 1 has ones, 0 otherwise
+## for 0.33<=x<0.66 column 2 has ones, 0 otherwise
+## for 0.66<=x<=1 column 3 has ones, 0 otherwise
+
+# initialize design matrix
+X <- matrix(0, nrow = length(x), ncol = 3)
+
+# define intervals using indicator functions
+X[,1] <- as.numeric(x_i < 0.33)
+X[,2] <- as.numeric(x_i >= 0.33 & x < 0.66)
+X[,3] <- as.numeric(x_i >= 0.66)
+```
+
+### Plot basis functions
+
+```{r}
+# Define the sequence of x values to evaluate the basis functions
+x_vals <- seq(0, 1, length.out = 1000)
+
+# Define the 3 basis functions as indicator functions
+B1 <- as.numeric(x_vals < 0.33)
+B2 <- as.numeric(x_vals >= 0.33 & x_vals < 0.66)
+B3 <- as.numeric(x_vals >= 0.66)
+
+# Plot
+plot(x_vals, B1, type = "l", col = "red", lwd = 2,
+     ylim = c(0, 1.2), ylab = "Basis Function Value", xlab = "x",
+     main = "Piecewise Constant Spline Basis Functions")
+lines(x_vals, B2, col = "blue", lwd = 2)
+lines(x_vals, B3, col = "green", lwd = 2)
+
+legend("topright", legend = c("B1: [0, 0.33)", "B2: [0.33, 0.66)", "B3: [0.66, 1]"),
+       col = c("red", "blue", "green"), lwd = 2, 
+       inset = 0.01,     # shrink distance from edge
+       cex = 0.8)        # shrink text
+
+```
+
+### Fit the basis functions to the data and plot
+
+```{r}
+# Step 1: Simulate the data
+## Done above
+
+# Step 2: Construct the piecewise constant basis (design matrix)
+X <- cbind(
+  B1 = as.numeric(x_i < 0.33),
+  B2 = as.numeric(x_i >= 0.33 & x_i < 0.66),
+  B3 = as.numeric(x_i >= 0.66)
+)
+
+# Step 3: Fit the linear model without intercept (so basis acts directly)
+fit <- lm(y_i ~ X - 1)  # "-1" removes the intercept
+
+# Step 4: Plot the data and the fitted piecewise constant spline
+# Sort x for nice plotting
+sorted_index <- order(x_i)
+x_sorted <- x_i[sorted_index]
+y_sorted <- y_i[sorted_index]
+
+# Predicted values using fitted model
+y_pred <- fitted(fit)
+
+# Step 5: Plot
+plot(x_i, y_i, pch = 16, col = "grey", xlab = "x", ylab = "y", main = "Piecewise Constant Fit")
+abline(v = c(0.33, 0.66), lty = 2, col = "blue")
+
+# Add the constant predictions over each interval
+for (j in 1:3) {
+  x_region <- x_i[X[, j] == 1] # get all x_i where jth column is 1
+  if (length(x_region) > 0) { # if there are any 1's:
+    x_min <- min(x_region) # get min x
+    x_max <- max(x_region) # get max x
+    y_val <- coef(fit)[j] # get the mean
+    # add constant mean (y_val) between min and mx
+    lines(c(x_min, x_max), c(y_val, y_val), col = "red", lwd = 2)
+  }
+}
+```
+
+## Piecewise Linear
+We now add a slope to each each piecewise function.
+
+### Define the basis functions
+
+$$
+\begin{aligned}
+B_1(x) &= \mathbb{1}(x < 0.33) \\
+B_2(x) &= x \cdot \mathbb{1}(x < 0.33) \\
+B_3(x) &= \mathbb{1}(0.33 \le x < 0.66) \\
+B_4(x) &= x \cdot \mathbb{1}(0.33 \le x < 0.66) \\
+B_5(x) &= \mathbb{1}(x \ge 0.66) \\
+B_6(x) &= x \cdot \mathbb{1}(x \ge 0.66)
+\end{aligned}
+$$
+
+### Define X
+
+X now has a 1 in column 1 and 2 if x in [0, 0.33), it has a 1 in column 3 and 4 if x in [0.33, 0.66) and a 1 in column 5 and 6 if x in [0.66,1].
+
+```{r}
+x <- seq(0, 1, length.out = 1000)
+
+B1 <- as.numeric(x < 0.33)
+B2 <- x * (x < 0.33)
+
+B3 <- as.numeric(x >= 0.33 & x < 0.66)
+B4 <- x * (x >= 0.33 & x < 0.66)
+
+B5 <- as.numeric(x >= 0.66)
+B6 <- x * (x >= 0.66)
+
+X <- cbind(B1, B2, B3, B4, B5, B6)
+```
+
+
+### Plot the basis functions
+
+```{r}
+plot(x, B1, type = "l", col = "black", ylim = c(0,1.1), lwd = 2,
+     ylab = "Basis Function Value", xlab = "x", main = "Discontinuous Piecewise Linear Basis")
+lines(x, B2, col = "red", lwd = 2)
+lines(x, B3, col = "blue", lwd = 2)
+lines(x, B4, col = "green", lwd = 2)
+lines(x, B5, col = "orange", lwd = 2)
+lines(x, B6, col = "purple", lwd = 2)
+
+legend("topleft", 
+       legend = c("B1 = 1 on [0,0.33)", "B2 = x on [0,0.33)", 
+                  "B3 = 1 on [0.33,0.66)", "B4 = x on [0.33,0.66)", 
+                  "B5 = 1 on [0.66,1]", "B6 = x on [0.66,1]"),
+       col = c("black", "red", "blue", "green", "orange", "purple"), 
+       lwd = 2, cex = 0.8)
+
+```
+
+### Fit the basis functions to the data and plot
+
+
+```{r}
+# Step 1: Simulate data
+## done above
+
+# Step 2: Define basis functions (discontinuous piecewise linear)
+B1 <- as.numeric(x_i < 0.33)
+B2 <- x_i * B1
+
+B3 <- as.numeric(x_i >= 0.33 & x_i < 0.66)
+B4 <- x_i * B3
+
+B5 <- as.numeric(x_i >= 0.66)
+B6 <- x_i * B5
+
+# Step 3: Build design matrix
+X <- cbind(B1, B2, B3, B4, B5, B6)
+
+# Step 4: Fit the linear model
+fit <- lm(y_i ~ X - 1)  # "-1" removes intercept; each region has its own intercept via B1, B3, B5
+
+# Step 5: Predict over a dense grid for smooth plotting
+x_plot <- seq(0, 1, length.out = 1000)
+
+B1p <- as.numeric(x_plot < 0.33)
+B2p <- x_plot * B1p
+
+B3p <- as.numeric(x_plot >= 0.33 & x_plot < 0.66)
+B4p <- x_plot * B3p
+
+B5p <- as.numeric(x_plot >= 0.66)
+B6p <- x_plot * B5p
+
+Xp <- cbind(B1p, B2p, B3p, B4p, B5p, B6p)
+
+# Predicted y values
+y_fit <- Xp %*% coef(fit)
+
+# Step 6: Plot
+plot(x_i, y_i, pch = 16, col = "grey", xlab = "x", ylab = "y", main = "Discontinuous Piecewise Linear Fit")
+lines(x_plot, y_fit, col = "blue", lwd = 2)
+abline(v = c(0.33, 0.66), col = "red", lty = 2)
+
+```
+
+## Piecewise linear (Continuous as the knots)
+Now the basis functions need to be continuous at the knots, so the intercepts for each linear function needs to match up.
+
+### Define the basis functions
+
+We now drop the two basis functions related to the intercept of the second and third sections.
+
+$$
+\begin{aligned}
+B_1(x) &= 1 \quad \text{(intercept)} \\
+B_2(x) &= x \quad \text{(linear term)} \\
+B_3(x) &= (x - 0.33)_+ = \max(0, x - 0.33) \\
+B_4(x) &= (x - 0.66)_+ = \max(0, x - 0.66)
+\end{aligned}
+$$
+
+### Define X
+
+```{r}
+# Define x values over the domain
+x <- seq(0, 1, length.out = 1000)
+
+# Define the knots
+knot1 <- 0.33
+knot2 <- 0.66
+
+# Construct the truncated power basis (degree 1 spline, continuous at knots)
+B1 <- rep(1, length(x))           # Intercept for all x
+B2 <- x                           # Linear term for all x
+B3 <- pmax(0, x - knot1)          # (x - 0.33)_+ for x>=0.33
+B4 <- pmax(0, x - knot2)          # (x - 0.66)_+ for x>=0.66
+
+# Combine into a design matrix
+X <- cbind(B1, B2, B3, B4)
+```
+
+### Plot the basis functions
+
+```{r}
+# Plot all basis functions
+plot(x, B1, type = "l", lwd = 2, col = "black", ylim = c(0, 1.1),
+     xlab = "x", ylab = "Basis Function Value", main = "Continuous Piecewise Linear Basis Functions")
+lines(x, B2, col = "blue", lwd = 2)
+lines(x, B3, col = "red", lwd = 2)
+lines(x, B4, col = "green", lwd = 2)
+
+# Add a legend
+legend("topleft",
+       legend = c("B1 = 1", "B2 = x", "B3 = (x - 0.33)+", "B4 = (x - 0.66)+"),
+       col = c("black", "blue", "red", "green"),
+       lwd = 2, cex = 0.8)
+```
+
+### Fit the basis functions to the data and plot
+
+We now want to fit:
+
+$$
+y_i = \beta_0\  +\  \beta_1x_i\ +\ \beta_2(x_i-0.33)_+\ +\ \beta_3(x_i-0.66)_+
+$$
+
+```{r}
+# Step 1: Simulate the data
+## done above
+
+# Step 2: Define the basis functions for the truncated power basis
+knot1 <- 0.33
+knot2 <- 0.66
+
+B1 <- rep(1, length(x_i))           # Intercept
+B2 <- x_i                           # x
+B3 <- pmax(0, x_i - knot1)          # (x - 0.33)_+
+B4 <- pmax(0, x_i - knot2)          # (x - 0.66)_+
+
+X <- cbind(B1, B2, B3, B4)
+
+# Step 3: Fit the linear model
+fit <- lm(y_i ~ X - 1)  # "-1" removes automatic intercept, since B1 handles it
+
+# Optional: check model summary
+summary(fit)
+```
+
+```{r}
+# Step 4: Predict over a smooth grid
+x_plot <- seq(0, 1, length.out = 1000)
+
+B1p <- rep(1, length(x_plot))
+B2p <- x_plot
+B3p <- pmax(0, x_plot - knot1)
+B4p <- pmax(0, x_plot - knot2)
+
+Xp <- cbind(B1p, B2p, B3p, B4p)
+y_fit <- Xp %*% coef(fit) # y_hat = XB_hat
+
+# Step 5: Plot
+plot(x_i, y_i, pch = 16, col = "grey", xlab = "x", ylab = "y", main = "Continuous Piecewise Linear Fit")
+lines(x_plot, y_fit, col = "blue", lwd = 2)
+abline(v = c(knot1, knot2), col = "red", lty = 2)
+```
+
+## Piecewise cubic polynomial
+
+## Piecewise cubic polynomial continuous at the knots
+
+## Piecewise cubic polynomial continuous up to first derivative
+
+## Piecewise cubic polynomial continuous up to second derivative
+
+
