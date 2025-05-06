@@ -13,6 +13,8 @@ output:
 ```{r setup, include=FALSE, warning=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 knitr::opts_chunk$set(fig.pos = 'H')
+library(splines)
+library(SemiPar)
 ```
 
 # Question 1
@@ -727,7 +729,6 @@ abline(v = c(knot1, knot2), col = "red", lty = 2)
 ## Piecewise cubic polynomial continuous up to second derivative
 Now we drop the quadratic truncated power basis too.
 
-
 ### Define the basis functions
 
 We can define $f(x)$ piecewise as:
@@ -836,4 +837,222 @@ plot(x_i, y_i, pch = 16, col = "grey", xlab = "x", ylab = "y",
 lines(x_plot, y_fit, col = "blue", lwd = 2)
 abline(v = c(knot1, knot2), col = "red", lty = 2)
 ```
+
+## Natural spline
+
+We will use the ns() function from the splines package. Note that we will assume the boundary knots are at 0 and 1, not at the two knots (0.33 and 0.66).
+
+### Define the basis function
+
+The ns() package defines the basis functions differently to ensure linearity past the boundary knots, but in general, from first principles, the basis functions are:
+
+$$
+f(x) = \beta_0 + \beta_1 x + \sum_{k=1}^{K} \theta_k \cdot N_k(x)
+$$
+
+$$
+N_k(x) = d_k(x) - d_K(x)
+$$
+
+$$
+d_k(x) = \frac{(x - \xi_k)^3_+ - (x - \xi_K)^3_+}{\xi_K - \xi_k}
+$$
+
+$$
+(x - \xi)^3_+ = 
+\begin{cases}
+(x - \xi)^3 & \text{if } x > \xi \\\\
+0 & \text{otherwise}
+\end{cases}
+$$
+
+Plotting the ns() basis functions:
+
+```{r}
+x_grid <- seq(0, 1, length.out = 200)
+B <- ns(x_grid, knots = c(0.33, 0.66))
+
+matplot(x_grid, B, type = "l", lty = 1, lwd = 2,
+        col = 1:ncol(B), ylab = "Basis Function Value",
+        main = "Natural Spline Basis Functions")
+legend("topright", legend = paste0("B", 1:ncol(B)), col = 1:ncol(B), lty = 1)
+
+```
+
+### Define X
+
+```{r}
+ns(x_i, knots = c(0.33, 0.66)) # note that they do not include the intercept
+```
+
+
+### Plot the basis functions
+
+### Fit the basis functions to the data
+
+```{r}
+# Fit model using natural spline with specified knots
+model_ns <- lm(y_i ~ ns(x_i, knots = c(0.33, 0.66))) # note we do not subtract 1 here
+```
+
+```{r}
+# Generate a smooth sequence of x values for plotting
+x_grid <- seq(0, 1, length.out = 1000)
+
+# Predict y values using the fitted spline model
+# Extract boundary knots from training data
+bknots <- range(x_i)
+
+# Generate basis on x_grid with same internal and boundary knots
+B_grid <- ns(x_grid, knots = c(0.33, 0.66), Boundary.knots = bknots)
+
+# Compute predicted values manually
+y_pred <- cbind(1, B_grid) %*% coef(model_ns)
+
+# Plot the data and the fitted spline
+plot(x_i, y_i, pch = 16, col = "grey", main = "Natural Spline Fit", xlab = "x", ylab = "y")
+lines(x_grid, y_pred, col = "blue", lwd = 2)
+abline(v = c(0.33, 0.66), col = "red", lty = 2)  # show knots
+
+```
+
+## B-sline basis function
+
+Note again here we use the bs() function to define the basis. These basis functions are non-zero only over a short range of the data each. Plot these:
+
+```{r}
+B <- bs(x_grid, knots = c(0.33, 0.66))
+matplot(x_grid, B, type = "l", lty = 1, lwd = 2,
+        col = 1:ncol(B), ylab = "Basis Function Value",
+        main = "B-Spline Basis Functions")
+legend("topright", legend = paste0("B", 1:ncol(B)), col = 1:ncol(B), lty = 1)
+```
+
+
+### Define X
+
+```{r}
+bs(x_i, knots = c(0.33, 0.66))
+```
+
+
+### Fit the basis functions to the data
+
+```{r}
+# Fit model using B-spline basis
+model_bs <- lm(y_i ~ bs(x_i, knots = c(0.33, 0.66))) # default: creates B-splines of degree 3
+```
+
+Plot these:
+```{r}
+# Prediction grid
+x_grid <- seq(0, 1, length.out = 1000)
+y_pred <- cbind(1, bs(x_grid, knots = c(0.33, 0.66))) %*% coef(model_bs)
+
+# Plot
+plot(x_i, y_i, pch = 16, col = "grey", main = "B-Spline Fit", xlab = "x", ylab = "y")
+lines(x_grid, y_pred, col = "darkgreen", lwd = 2)
+abline(v = c(0.33, 0.66), col = "red", lty = 2)
+```
+
+## Adding confidence bands to the B-spline
+
+We have: 
+$$
+\text{var}(\hat{f}(x)) = X \Sigma X^T
+$$
+
+where
+
+$$
+\Sigma_{\beta} = \hat{\sigma}^2 (X^TX)^{-1}
+$$
+
+$$
+\hat{\sigma}^2 = \frac{1}{n - p} \sum_{i=1}^{n} (y_i - \hat{y}_i)^2
+$$
+Thus we can calculate it here:
+```{r}
+# Create design matrix (basis functions) at new x values
+X_grid <- cbind(1, bs(x_grid, knots = c(0.33, 0.66), Boundary.knots = range(x)))
+
+
+# Residual variance
+residuals <- resid(model_bs)
+n <- length(y_i)
+p <- length(coef(model_bs))
+sigma_hat2 <- sum(residuals^2) / (n - p)
+
+# Design matrix from training data (same structure as above)
+X_train <- model.matrix(model_bs)
+
+# covariance matrix of coefficients
+Sigma_beta <- sigma_hat2 * solve(t(X_train) %*% X_train)
+
+# pointwise se of predicted values
+se_f_hat <- sqrt(rowSums((X_grid %*% Sigma_beta) * X_grid))  # sqrt of diagonal of var(f_hat)
+
+# now plot:
+fitted_vals <- X_grid %*% coef(model_bs)
+upper <- fitted_vals + 1.96 * se_f_hat
+lower <- fitted_vals - 1.96 * se_f_hat
+
+plot(x_i, y_i, pch = 16, col = "grey", xlab = "x", ylab = "y", main = "B-spline with 95% CI")
+lines(x_grid, fitted_vals, col = "blue", lwd = 2)
+lines(x_grid, upper, col = "blue", lty = 2)
+lines(x_grid, lower, col = "blue", lty = 2)
+polygon(c(x_grid, rev(x_grid)), c(upper, rev(lower)), col = rgb(0, 0, 1, 0.1), border = NA)
+
+```
+
+# Question 2
+Instruction: Write an R function to create a cubic spline basis based on a truncated power basis. Construct the basis matrix 𝑋. Fit a cubic spline to the LIDAR data. Add the fitted spline curve to a plot with the observations. The LIDAR data are available in the SemiPar library.
+
+## Load data
+```{r}
+rm(list=ls())
+data("lidar")
+x <- lidar$range
+y <- lidar$logratio
+
+plot(x, y)
+```
+
+## Write the R function
+
+Given data, return the design matrix, X, that uses the cubic spline basis with truncated power bases. For now, we will assume the function is specific to the LIDAR data to determine the knots.
+
+```{r}
+cubic_spline_basis <- function(x, knots = c(550, 620)){
+  b1 <- rep(1, length(x)) # global intercept
+  b2 <- x # global linear
+  b3 <- x^2 # global quadratic
+  b4 <- x^3 # global cubic
+  b5 <- (pmax(0, x-knots[1]))^3 # truncated cubic power basis for knot 1
+  b6 <- (pmax(0, x-knots[2]))^3 # truncated cubic power basis for knot 2
+  
+  basis_matrix <- cbind(b1, b2, b3, b4, b5, b6)
+  return(basis_matrix)
+}
+
+# test that it works: the basis matrix is:
+cubic_basis <- cubic_spline_basis(x)
+
+# now fit the cubic spline to the LIDAR data
+model_cubic <- lm(y ~ cubic_basis - 1)
+
+# create many x for a nice plot
+x_plot <- seq(from = min(x), to = max(x), length.out=1000)
+basis_plot <- cubic_spline_basis(x_plot)
+y_plot <- basis_plot %*% coef(model_cubic)
+
+# plot
+plot(x, y, pch = 16, col = "grey", xlab = "x", ylab = "y",
+     main = "Cubic Polynomial with truncated power basis on LIDAR data")
+lines(x_plot, y_plot, col = "blue", lwd = 2)
+abline(v = c(550, 620), col = "red", lty = 2)
+```
+
+# Question 3
+Instructions: Construct the B-spline basis functions (see ESL Appendix pg. 186): Haar basis, linear, quadratic, cubic B-spline basis functions. x between -1, 1. Create basis matrix X. Plot the basis functions.
 
