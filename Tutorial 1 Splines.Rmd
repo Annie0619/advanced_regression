@@ -39,11 +39,6 @@ Now, we will:
 3. Plot the basis functions
 4. Fit the basis functions to the data and plot
 
-### Define the basis functions
-### Define X
-### Plot the basis functions
-### Fit the basis functions to the data and plot
-
 ## Piecewise Constant
 
 ### Define the basis functions
@@ -1056,3 +1051,92 @@ abline(v = c(550, 620), col = "red", lty = 2)
 # Question 3
 Instructions: Construct the B-spline basis functions (see ESL Appendix pg. 186): Haar basis, linear, quadratic, cubic B-spline basis functions. x between -1, 1. Create basis matrix X. Plot the basis functions.
 
+
+The following function will fit an order M B-splines basis to any sequence x with a set position for the knots.
+
+```{r}
+construct_bspline_basis <- function(x, knots, order) {
+  # Step 1: Augment knot sequence
+  augmented_knots <- c(rep(min(knots), order), knots, rep(max(knots), order))
+  n_basis <- length(augmented_knots) - order - 1 # total number of b-spline bases we can construct
+  
+  # Step 2: Initialize Haar basis (order 1)
+  basis_list <- list()
+  B <- matrix(0, nrow = length(x), ncol = n_basis)
+  for (i in 1:n_basis) {
+  left <- augmented_knots[i]
+  right <- augmented_knots[i + 1]
+  
+  if (i < n_basis) {
+    B[, i] <- as.numeric(x >= left & x < right)
+  } else {
+    B[, i] <- as.numeric(x >= left & x <= right)  # include right endpoint for final basis
+    }
+  }
+
+  basis_list[[1]] <- B
+  
+  if(order>1){ # only continue if order > 1
+  # Step 3: Recursively build up to desired order
+  for (m in 2:order) {
+    prev_B <- basis_list[[m - 1]]
+    prev_B <- cbind(prev_B, 0) # pad with zero for endpoint
+    new_B <- matrix(0, nrow = length(x), ncol = ncol(prev_B) - 1)
+    for (i in 1:(ncol(prev_B) - 1)) {
+      denom1 <- augmented_knots[i + m - 1] - augmented_knots[i]
+      denom2 <- augmented_knots[i + m] - augmented_knots[i + 1]
+      
+      T1 <- if (denom1 == 0) 0 else (x - augmented_knots[i]) / denom1 * prev_B[, i]
+      T2 <- if (denom2 == 0) 0 else (augmented_knots[i + m] - x) / denom2 * prev_B[, i + 1]
+      
+      new_B[, i] <- T1 + T2
+      }
+    basis_list[[m]] <- new_B
+    }
+  }
+  
+  return(basis_list[[order]])
+}
+```
+
+```{r}
+# define x and the knots
+x <- seq(-1, 1, length.out = 1000)
+knots <- seq(-1, 1, by = 0.1)
+```
+
+## Haar (order 1 B-splines basis)
+
+```{r}
+B_cubic <- construct_bspline_basis(x, knots, order = 1)
+
+matplot(x, B_cubic, type = "l", lty = 1, col = rainbow(ncol(B_cubic)),
+        ylab = "Basis Value", main = "Haar B-spline Basis Functions (Order 1)")
+```
+
+## B-spline of order 2
+
+```{r}
+B_cubic <- construct_bspline_basis(x, knots, order = 2)
+
+matplot(x, B_cubic, type = "l", lty = 1, col = rainbow(ncol(B_cubic)),
+        ylab = "Basis Value", main = "B-spline Basis Functions (Order 2)")
+```
+
+## B-spline of order 3
+
+```{r}
+B_cubic <- construct_bspline_basis(x, knots, order = 3)
+
+matplot(x, B_cubic, type = "l", lty = 1, col = rainbow(ncol(B_cubic)),
+        ylab = "Basis Value", main = "B-spline Basis Functions (Order 3)")
+```
+
+## B-spline of order 4
+
+```{r}
+B_cubic <- construct_bspline_basis(x, knots, order = 4)
+
+matplot(x, B_cubic, type = "l", lty = 1, col = rainbow(ncol(B_cubic)),
+        ylab = "Basis Value", main = "B-spline Basis Functions (Order 4)")
+```
