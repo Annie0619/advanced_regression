@@ -1140,3 +1140,133 @@ B_cubic <- construct_bspline_basis(x, knots, order = 4)
 matplot(x, B_cubic, type = "l", lty = 1, col = rainbow(ncol(B_cubic)),
         ylab = "Basis Value", main = "B-spline Basis Functions (Order 4)")
 ```
+
+# Penalized Regression Splines
+## Part 1
+Instructions: Fit P-splines to the LIDAR data. Start with a B-spline basis, calculate the penalty matrix, and fit to the data. Repeat for 𝜆 = 0, 0.1, 0.5, 1, 5, 10. Plot the data and add all of the resulting P-splines to the plot.
+
+To fit a penalized spline using ordinary least squares (e.g., via the \texttt{lm()} function in R), we augment the design matrix and response vector to incorporate the penalty. 
+
+Let:
+\begin{itemize}
+  \item $X$ be the B-spline basis matrix (size $n \times k$)
+  \item $y$ be the response vector (length $n$)
+  \item $D$ be a difference matrix (e.g., second-order differences of the identity matrix)
+  \item $\lambda$ be the smoothing parameter
+\end{itemize}
+
+The penalized least squares solution is given by:
+$$
+\hat{\beta} = \arg\min_\beta \left\{ \|y - X\beta\|^2 + \lambda \|D\beta\|^2 \right\}
+$$
+
+This is equivalent to solving:
+$$
+\hat{\beta} = \left(X^\top X + \lambda D^\top D\right)^{-1} X^\top y
+$$
+
+We can implement this using ordinary least squares by augmenting $X$ and $y$ as follows:
+$$
+X_{\text{aug}} = \begin{bmatrix}
+X \\
+\sqrt{\lambda} D
+\end{bmatrix},
+\quad
+y_{\text{aug}} = \begin{bmatrix}
+y \\
+0
+\end{bmatrix}
+$$
+
+Then we solve the standard linear model:
+$$
+\hat{\beta} = \arg\min_\beta \left\| y_{\text{aug}} - X_{\text{aug}} \beta \right\|^2
+$$
+
+This formulation allows penalized regression to be fit using the standard \texttt{lm()} function:
+\begin{verbatim}
+lm(y_aug ~ X_aug - 1)
+\end{verbatim}
+where \texttt{-1} removes the intercept, assuming the intercept is included in the spline basis.
+
+
+```{r}
+# load the data
+data(lidar)
+x <- lidar$range
+y <- lidar$logratio
+# use equally spaced knots:
+lidar_knots <- seq(from = min(x), to = max(x), length.out = 20) # use these knots by visual inspection
+
+# create B-splines cubic basis
+cubic_bspline_basis <- construct_bspline_basis(x, lidar_knots, 4)
+
+# 1. Penalty matrix
+k <- ncol(cubic_bspline_basis)
+D <- diff(diag(k), differences = 1)  # 1st-order differences
+P <- t(D) %*% D
+
+# 2. Lambda values
+## note you cannot have lambda = 0, since this causes linear dependence and rand deficiency in x_aug later on!
+lambda <- c(0.0001, 0.1, 0.5, 1, 5, 10)
+coeff_list <- list()
+
+# 3. Fit penalized model for each lambda
+for (i in seq_along(lambda)) {
+  lam <- lambda[i]
+  X_aug <- rbind(cubic_bspline_basis, sqrt(lam) * D)
+  y_aug <- c(y, rep(0, nrow(D)))
+  
+  model <- lm(y_aug ~ X_aug - 1)
+  coeff_list[[i]] <- coef(model)
+}
+names(coeff_list) <- paste0("lambda_", lambda)
+
+# calculate fitted values:
+y_hat_list <- lapply(coeff_list, function(b) cubic_bspline_basis %*% b)
+
+
+# plot
+plot(x, y, pch = 16, col = "grey50", main = "P-spline Fits for Different Lambda Values",
+     xlab = "x", ylab = "y", ylim = range(y, unlist(y_hat_list)))
+colors <- rainbow(length(lambda))  # one color per lambda
+for (i in seq_along(y_hat_list)) {
+  lines(x, y_hat_list[[i]], col = colors[i], lwd = 2)
+}
+legend("bottomleft", legend = paste0("λ = ", lambda), col = colors, lty = 1, lwd = 2)
+
+```
+
+## Part 2
+Repeat this for a range of 𝜆 values between 0 and 20, each time calculating the GCV value. Plot GCV as a function of 𝜆 and choose a suitable 𝜆.
+
+```{r}
+lambda <- seq(from = 0.0001, to = 20, length.out=100)
+n <- length(y)
+X <- cubic_bspline_basis
+GCV_values <- numeric(length(lambda))
+
+for (i in seq_along(lambda)) {
+  lam <- lambda[i]
+  X_aug <- rbind(cubic_bspline_basis, sqrt(lam) * D)
+  y_aug <- c(y, rep(0, nrow(D)))
+  
+  model <- lm(y_aug ~ X_aug - 1)
+  b_hat <- coef(model)
+  y_hat <- X %*% b_hat
+  RSS <- sum((y - y_hat)^2)
+  
+  # Smoother matrix trace: trace(S) = trace(X (X^T X + λ P)^-1 X^T)
+  XtX <- t(X) %*% X
+  S_lambda <- X %*% solve(XtX + lam * P, t(X))  # S = X (XtX + λP)^-1 Xt
+  trace_S <- sum(diag(S_lambda))
+  
+  GCV_values[i] <- (RSS / n) / (1 - trace_S / n)^2
+}
+
+# Plot GCV vs lambda
+plot(lambda, GCV_values, type = "b", pch = 19, col = "blue",
+     xlab = expression(lambda), ylab = "GCV", main = "GCV for P-spline Fits")
+```
+
+A suitable $\lambda$ would be the value that minimizes the GCV.
