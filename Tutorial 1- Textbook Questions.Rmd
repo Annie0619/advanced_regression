@@ -1,0 +1,77 @@
+---
+title: "Tutorial 1: Textbook Questions"
+author: "Andomei Smit: SMTAND051"
+date: "14/04/2025"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 2
+    fig_caption: true
+    keep_tex: yes
+---
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.pos = 'H')
+library(splines)
+library(SemiPar)
+```
+
+```{r}
+# 1. Setup
+set.seed(12)
+n <- 50
+n_sim <- 1000
+x_grid <- seq(0.1, 0.99, length.out = 200)
+predictions <- list(
+  linear = matrix(NA, nrow = n_sim, ncol = length(x_grid)),
+  cubic = matrix(NA, nrow = n_sim, ncol = length(x_grid)),
+  spline = matrix(NA, nrow = n_sim, ncol = length(x_grid)),
+  natural = matrix(NA, nrow = n_sim, ncol = length(x_grid))
+)
+
+# 2. Simulate multiple datasets
+for (s in 1:n_sim) {
+  print(s)
+  x <- sort(runif(n, 0, 1))
+  y <- sin(2 * pi * x) + rnorm(n, sd = 0.3)
+  print(x)
+  print(y)
+
+  # Linear model (2 df)
+  model_linear <- lm(y ~ x)
+  predictions$linear[s, ] <- predict(model_linear, newdata = data.frame(x = x_grid))
+
+  # Cubic polynomial (4 df)
+  model_cubic <- lm(y ~ poly(x, 3))
+  predictions$cubic[s, ] <- predict(model_cubic, newdata = data.frame(x = x_grid))
+
+  # Cubic spline with 2 interior knots at 0.33, 0.66 (6 df)
+  knots_spline <- c(0.33, 0.66)
+  basis <- bs(x, knots = knots_spline, degree = 3)
+  model_spline <- lm(y ~ basis)
+  prediction_basis <- bs(x_grid, knots = knots_spline, degree = 3)
+  predictions$spline[s, ] <- cbind(1, prediction_basis)%*%coef(model_spline)
+
+  # Natural cubic spline with 4 interior knots and boundary knots at 0.1, 0.9 (6 df)
+  knots_nat <- seq(0.1, 0.9, length.out = 6)[-c(1,6)]
+  ns_basis <- ns(x, knots = knots_nat, Boundary.knots = c(0.1, 0.9))
+  model_nat <- lm(y ~ ns_basis)
+  prediction_basis_ns <- ns(x_grid, knots = knots_nat, Boundary.knots = c(0.1, 0.9))
+  predictions$natural[s, ] <- cbind(1, prediction_basis_ns)%*%coef(model_nat)
+}
+
+# 3. Compute pointwise variance
+var_curves <- lapply(predictions, function(mat) apply(mat, 2, var))
+
+# 4. Plot the variance curves
+plot(x_grid, var_curves$linear, type = "l", col = "blue", ylim = range(unlist(var_curves)),
+     xlab = "x", ylab = "Pointwise Variance", main = "Variance Curves for Different Models")
+lines(x_grid, var_curves$cubic, col = "red")
+lines(x_grid, var_curves$spline, col = "green")
+lines(x_grid, var_curves$natural, col = "purple")
+legend("topright", legend = c("Linear (2 df)", "Cubic (4 df)", "Cubic Spline (6 df)", "Natural Spline (6 df)"),
+       col = c("blue", "red", "green", "purple"), lty = 1)
+```
+
+

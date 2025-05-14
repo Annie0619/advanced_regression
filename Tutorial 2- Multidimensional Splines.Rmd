@@ -1,0 +1,490 @@
+---
+title: "Tutorial 2- Multidimensional Splines"
+author: "Andomei Smit: SMTAND051"
+date: "14/04/2025"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 2
+    fig_caption: true
+    keep_tex: yes
+---
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.pos = 'H')
+library(nlme)
+library(mgcv)
+library(splines)
+```
+
+# Example from the notes
+```{r}
+# simulate some data from a surface
+n <- 5000
+eg <- gamSim(2, n = n, scale = 0.5)
+
+names(eg)
+attach(eg)
+
+truef <- eg$truth
+persp(truef$x, truef$z, truef$f, col = heat.colors(40), main = "a.truth")
+
+# linear terms plus their interaction
+par(mfrow = c(1,2))
+b1 <- gam(y ~ x + z + x*z, data= data)
+vis.gam(b1, main = "b.linear model")
+
+# additive splines
+b2 <- gam(y ~ s(x) + s(z), data = data)
+vis.gam(b2, main = "c. additive splines")
+
+
+par(mfrow = c(1, 2))
+ind <- sample(1:n, 200, replace = FALSE)
+b5 <- gam(y ~ s(x, z, k = 40), data = data,
+knots = list(x = data$x[ind], z = data$z[ind]))
+vis.gam(b5, theta = 30, phi = 30, main = "low rank thin-plate spline")
+
+## and a pure "knot based" spline of the same data
+b6<- gam(y ~ s(x, z, k = 64), data = data,
+knots = list(x = rep((1:8-0.5)/8,8),
+z = rep((1:8-0.5)/8, rep(8,8))))
+vis.gam(b6,color = "heat", theta = 30, phi = 30, main = "knot-based thin-plate spline")
+
+summary(b6)
+detach(eg)
+```
+# Question 1
+Use the gam function to fit a tensor product spline to the surface, with and without penalty. With and without choosing the knots. Try different values of the smoothing parameter. Different numbers of knots.
+
+## Tensor product spline with a penalty
+
+```{r}
+dat <- eg$data
+y <- dat$y
+x <- dat$x
+z <- dat$z
+
+tensor_penalty <- gam(y ~ te(x, z), data = dat)
+vis.gam(tensor_penalty, main = "Tensor Product Spline with penalty")
+```
+
+## Tensor product spline with no penalty
+
+```{r}
+model_no_penalty <- gam(y ~ te(x, z, fx = TRUE), data = dat)
+vis.gam(model_no_penalty, main = "Tensor Product Spline without penalty")
+```
+
+## Tensor Product spline with choosing number of knots manually
+
+```{r}
+range(x)
+range(z)
+# Penalized with 5 knots in each direction
+tensor_choose_knots <- gam(y ~ te(x, z, 
+                       k = c(5,5)), # set the number of knots for x and z
+                data = dat)
+vis.gam(tensor_choose_knots, main = "Tensor Product Spline by choosing number of knots")
+```
+
+## Tensor Product Spline choosing exact knot placement
+
+```{r}
+# Create a grid of knots
+knots_list <- list(
+  x = seq(0, 1, length.out = 5),
+  z = seq(0, 1, length.out = 5)
+)
+
+model_custom_knots <- gam(y ~ te(x, z, k = c(5,5)), data = dat, knots = knots_list)
+vis.gam(model_custom_knots, main = "Tensor Product Spline choosing exact knot placement")
+
+```
+
+## Tensor Product Spline with different number for smoothing parameter
+
+```{r}
+# Fix smoothing parameter to a small value (less smooth)
+model_sp_small <- gam(y ~ te(x, z), data = dat, 
+                      sp = c(0.01, 0.01)) # specify the smoothing function for x, z
+# note that they only apply marginal penalties and do not penalize the interaction terms
+
+# Fix smoothing parameter to a large value (very smooth)
+model_sp_large <- gam(y ~ te(x, z), data = dat, sp = c(10, 10))
+
+par(mfrow=c(1,2))
+vis.gam(model_sp_small)
+vis.gam(model_sp_large)
+
+# if you're unsure of how many sp values you need:
+m <- gam(y ~ te(x, z))
+length(m$sp) # we need 2
+```
+
+# Question 2
+Repeat Q1, but with Thin-plate splines
+
+## Thin-plate spline with a penalty
+
+```{r}
+dat <- eg$data
+y <- dat$y
+x <- dat$x
+z <- dat$z
+
+thin_plate_penalty <- gam(y ~ s(x, z), data = dat)
+vis.gam(thin_plate_penalty, main = "Thin-plate Spline with penalty")
+```
+
+## Thin-plate spline with no penalty
+
+```{r}
+thin_plate_no_penalty <- gam(y ~ s(x, z, fx = TRUE), data = dat)
+vis.gam(thin_plate_no_penalty, main = "Thin-plate Spline without penalty")
+```
+
+## Thin-plate spline with choosing number of knots manually
+
+```{r}
+range(x)
+range(z)
+# Penalized with 5 knots in each direction
+thin_plate_choose_knots <- gam(y ~ s(x, z,
+                       k = 50), # now we set one k that calculates the joint basis functions
+                data = dat)
+vis.gam(thin_plate_choose_knots, main = "Thin-plate Spline by choosing number of knots")
+```
+
+## Thin-plate Spline choosing exact knot placement
+
+You cannot specify exact knot placement for Thin-plate splines as it automatically calculates the knots that optimize smoothness.
+
+## Thin-plate Spline with different number for smoothing parameter
+
+```{r}
+# Fix smoothing parameter to a small value (less smooth)
+thin_plate_sp_small <- gam(y ~ s(x, z), data = dat, 
+                      sp = 0.01) # now we only need one because thin plate splines penalizes the integral of squared derivatives over the whole 2D function, i.e. one joint value
+
+# Fix smoothing parameter to a large value (very smooth)
+thin_plate_sp_large <- gam(y ~ s(x, z), data = dat, sp = 10)
+
+par(mfrow=c(1,2))
+vis.gam(thin_plate_sp_small)
+vis.gam(thin_plate_sp_large)
+
+# if you're unsure of how many sp values you need:
+m <- gam(y ~ s(x, z))
+length(m$sp) # we only need 1
+```
+
+# Question 3
+
+The question has 4 sub-steps:
+1. Construct a tensor product basis using R functions for the marginal bases of x and z
+2. Fit the model without the use of R functions
+3. Write the code such that you can vary the number of knots
+4. Plot the surface
+
+We will write a function to do the following:
+1. Take in values x and z as well as the number of knots for each as a vector
+2. Construct the basis functions using the bs function for x and z individually
+3. Combine the basis functions to for the tensor product basis
+4. Return the tensor product basis
+
+```{r}
+create_tensor_product_basis <- function(x, z, num_knots){
+  x_num_knots <- num_knots[1]
+  z_num_knots <- num_knots[2]
+  
+  # determine the degrees of freedom
+  x_df <- 3 + x_num_knots
+  z_df <- 3 + z_num_knots
+  
+  # construct the marginal b-splines basis
+  x_basis <- bs(x, df = x_df, degree = 3)
+  z_basis <- bs(z, df = z_df, degree = 3)
+  
+  # combine to form tensor product
+  num_cols <- ncol(x_basis)*ncol(z_basis)
+  tensor_basis <- matrix(NA, nrow = length(x), ncol = num_cols)
+  # take tensor product of all basis functions:
+  cur_col <- 1
+  for(i in 1:ncol(x_basis)){
+    for(j in 1:ncol(z_basis)){
+      tensor_basis[, cur_col] <- x_basis[,i]*z_basis[,j]
+      cur_col <- cur_col + 1
+    }
+  }
+  return(tensor_basis)
+}
+```
+
+```{r}
+# create the basis
+tensor_prod_basis <- create_tensor_product_basis(x, z, num_knots = c(2,2))
+
+# fit to the data using OLS
+beta_hat <- solve(crossprod(tensor_prod_basis), crossprod(tensor_prod_basis, y))
+y_fitted <- tensor_prod_basis%*%beta_hat
+
+# now fit the surface
+# Create regular grid
+x_seq <- seq(min(x), max(x), length.out = 50)
+z_seq <- seq(min(z), max(z), length.out = 50)
+grid <- expand.grid(x = x_seq, z = z_seq)
+
+# Create tensor basis for grid
+grid_basis <- create_tensor_product_basis(grid$x, grid$z, num_knots = c(2,2))  
+
+# Predict
+grid_yhat <- grid_basis %*% beta_hat
+
+# Reshape
+z_matrix <- matrix(grid_yhat, nrow = length(x_seq), ncol = length(z_seq))
+
+# 3D surface plot
+persp(x_seq, z_seq, z_matrix,
+      theta = 30, phi = 30, expand = 0.5,
+      col = "lightblue", shade = 0.5,
+      xlab = "x", ylab = "z", zlab = "Fitted y",
+      main = "Fitted Tensor Product Surface")
+```
+
+Repeat but with 10 knots for x and z.
+
+```{r}
+# create the basis
+tensor_prod_basis <- create_tensor_product_basis(x, z, num_knots = c(10,10))
+
+# fit to the data using OLS
+beta_hat <- solve(crossprod(tensor_prod_basis), crossprod(tensor_prod_basis, y))
+y_fitted <- tensor_prod_basis%*%beta_hat
+
+# now fit the surface
+# Create regular grid
+x_seq <- seq(min(x), max(x), length.out = 50)
+z_seq <- seq(min(z), max(z), length.out = 50)
+grid <- expand.grid(x = x_seq, z = z_seq)
+
+# Create tensor basis for grid
+grid_basis <- create_tensor_product_basis(grid$x, grid$z, num_knots = c(10,10))  
+
+# Predict
+grid_yhat <- grid_basis %*% beta_hat
+
+# Reshape
+z_matrix <- matrix(grid_yhat, nrow = length(x_seq), ncol = length(z_seq))
+
+# 3D surface plot
+persp(x_seq, z_seq, z_matrix,
+      theta = 30, phi = 30, expand = 0.5,
+      col = "lightblue", shade = 0.5,
+      xlab = "x", ylab = "z", zlab = "Fitted y",
+      main = "Fitted Tensor Product Surface")
+```
+
+# Question 4
+## Thin-plate with random observations as knots
+
+```{r}
+create_thin_plate_random <- function(x, z, num_obs){
+  dat <- cbind(x,z)
+  # choose random index of observations
+  index <- sample(1:length(x), num_obs)
+  knots <- dat[index,]
+  
+  thin_plate_basis <- matrix(NA, ncol = (3+num_obs), nrow = length(x))
+  
+  thin_plate_basis[,1] <- 1 # column of ones for intercept
+  thin_plate_basis[,2] <- x # x is column 2
+  thin_plate_basis[,3] <- z # z is column 3
+  
+  # construct remaining basis functions
+  ## calculate the distance:
+  for(i in 1:num_obs){
+    cur_knot <- knots[i,]
+    r <- sqrt((x - cur_knot[1])^2 + (z - cur_knot[2])^2)  # Euclidean distance
+    # Handle r = 0 carefully (log(0) is undefined)
+    r[r == 0] <- 1e-10   # small number to avoid NaN
+    basis <- r^2*log(r)
+    thin_plate_basis[,3+i] <- basis
+  }
+  return(thin_plate_basis)
+}
+
+# create_thin_plate_random(x, z, 3)
+```
+
+```{r}
+# apply the function
+## create the basis
+thin_plate_basis <- create_thin_plate_random(x, z, 3)
+
+
+# fit to the data using OLS
+beta_hat <- solve(crossprod(thin_plate_basis), crossprod(thin_plate_basis, y))
+y_fitted <- thin_plate_basis%*%beta_hat
+
+# now fit the surface
+# Create regular grid
+x_seq <- seq(min(x), max(x), length.out = 50)
+z_seq <- seq(min(z), max(z), length.out = 50)
+grid <- expand.grid(x = x_seq, z = z_seq)
+
+# Create tensor basis for grid
+grid_basis <- create_thin_plate_random(grid$x, grid$z, 3)  
+
+# Predict
+grid_yhat <- grid_basis %*% beta_hat
+
+# Reshape
+z_matrix <- matrix(grid_yhat, nrow = length(x_seq), ncol = length(z_seq))
+
+# 3D surface plot
+persp(x_seq, z_seq, z_matrix,
+      theta = 30, phi = 30, expand = 0.5,
+      col = "lightblue", shade = 0.5,
+      xlab = "x", ylab = "z", zlab = "Fitted y",
+      main = "Fitted Thin-plate Surface")
+```
+
+Now refit is with more knots.
+
+```{r}
+# apply the function
+## create the basis
+thin_plate_basis <- create_thin_plate_random(x, z, 500)
+
+
+# fit to the data using OLS
+beta_hat <- solve(crossprod(thin_plate_basis), crossprod(thin_plate_basis, y))
+y_fitted <- thin_plate_basis%*%beta_hat
+
+# now fit the surface
+# Create regular grid
+x_seq <- seq(min(x), max(x), length.out = 50)
+z_seq <- seq(min(z), max(z), length.out = 50)
+grid <- expand.grid(x = x_seq, z = z_seq)
+
+# Create tensor basis for grid
+grid_basis <- create_thin_plate_random(grid$x, grid$z, 500)  
+
+# Predict
+grid_yhat <- grid_basis %*% beta_hat
+
+# Reshape
+z_matrix <- matrix(grid_yhat, nrow = length(x_seq), ncol = length(z_seq))
+
+# 3D surface plot
+persp(x_seq, z_seq, z_matrix,
+      theta = 30, phi = 30, expand = 0.5,
+      col = "lightblue", shade = 0.5,
+      xlab = "x", ylab = "z", zlab = "Fitted y",
+      main = "Fitted Thin-plate Surface")
+```
+
+## Thin plate spline with equally spaced knots
+
+```{r}
+create_thin_plate_equally <- function(x, z, num_knots){
+  dat <- cbind(x,z)
+  # set equally spaced knots
+  total_points <- num_knots + 2
+  all_x_points <- seq(range(x)[1], range(x)[2], length.out = total_points)
+  x_knots <- all_x_points[-c(1,total_points)] # remove first and last points to form interior knots
+  all_z_points <- seq(range(z)[1], range(z)[2], length.out = total_points)
+  z_knots <- all_z_points[-c(1,total_points)] # remove first and last points to form interior knots
+  # now combine all combinations of these knots to form knots over the whole 2D plane
+  knots <- expand.grid(x_knots, z_knots)
+
+  
+  thin_plate_basis <- matrix(NA, ncol = (3+ nrow(knots)), nrow = length(x))
+  
+  thin_plate_basis[,1] <- 1 # column of ones for intercept
+  thin_plate_basis[,2] <- x # x is column 2
+  thin_plate_basis[,3] <- z # z is column 3
+  
+  # construct remaining basis functions
+  ## calculate the distance:
+  for(i in 1:nrow(knots)){
+    cur_knot <- as.numeric(knots[i,]) # a vector of knots
+    r <- sqrt((x - cur_knot[1])^2 + (z - cur_knot[2])^2)  # Euclidean distance
+    # Handle r = 0 carefully (log(0) is undefined)
+    r[r == 0] <- 1e-10   # small number to avoid NaN
+    basis <- r^2*log(r)
+    thin_plate_basis[,3+i] <- basis
+  }
+  return(thin_plate_basis)
+}
+
+# create_thin_plate_equally(x, z, 4)
+```
+
+```{r}
+# apply the function
+## create the basis
+thin_plate_basis <- create_thin_plate_equally(x, z, 5)
+
+# fit to the data using OLS
+beta_hat <- solve(crossprod(thin_plate_basis), crossprod(thin_plate_basis, y))
+y_fitted <- thin_plate_basis%*%beta_hat
+
+# now fit the surface
+# Create regular grid
+x_seq <- seq(min(x), max(x), length.out = 50)
+z_seq <- seq(min(z), max(z), length.out = 50)
+grid <- expand.grid(x = x_seq, z = z_seq)
+
+# Create tensor basis for grid
+grid_basis <- create_thin_plate_equally(grid$x, grid$z, 5)  
+
+# Predict
+grid_yhat <- grid_basis %*% beta_hat
+
+# Reshape
+z_matrix <- matrix(grid_yhat, nrow = length(x_seq), ncol = length(z_seq))
+
+# 3D surface plot
+persp(x_seq, z_seq, z_matrix,
+      theta = 30, phi = 30, expand = 0.5,
+      col = "lightblue", shade = 0.5,
+      xlab = "x", ylab = "z", zlab = "Fitted y",
+      main = "Fitted Thin-plate Surface")
+```
+
+Now add more knots.
+
+```{r}
+# apply the function
+## create the basis
+thin_plate_basis <- create_thin_plate_equally(x, z, 10)
+
+# fit to the data using OLS
+beta_hat <- solve(crossprod(thin_plate_basis), crossprod(thin_plate_basis, y))
+y_fitted <- thin_plate_basis%*%beta_hat
+
+# now fit the surface
+# Create regular grid
+x_seq <- seq(min(x), max(x), length.out = 50)
+z_seq <- seq(min(z), max(z), length.out = 50)
+grid <- expand.grid(x = x_seq, z = z_seq)
+
+# Create tensor basis for grid
+grid_basis <- create_thin_plate_equally(grid$x, grid$z, 10)  
+
+# Predict
+grid_yhat <- grid_basis %*% beta_hat
+
+# Reshape
+z_matrix <- matrix(grid_yhat, nrow = length(x_seq), ncol = length(z_seq))
+
+# 3D surface plot
+persp(x_seq, z_seq, z_matrix,
+      theta = 30, phi = 30, expand = 0.5,
+      col = "lightblue", shade = 0.5,
+      xlab = "x", ylab = "z", zlab = "Fitted y",
+      main = "Fitted Thin-plate Surface")
+```
