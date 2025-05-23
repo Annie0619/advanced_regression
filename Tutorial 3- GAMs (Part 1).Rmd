@@ -1,0 +1,551 @@
+---
+title: "Tutorial 3- GAMs"
+author: "Andomei Smit: SMTAND051"
+date: "16/05/2025"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 2
+    fig_caption: true
+    keep_tex: yes
+---
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.pos = 'H')
+```
+
+# Penalized Likelihood Example
+
+Note here we are not using a GAM, but looking at optimizing a single lambda in each iteration. Since the response variable is not linear, but in fact follows a Poisson distribution, we make use of the Penalized Likelihood method.
+
+Begin by simulating non-linear Poisson data.
+```{r}
+rm(list=ls())
+# simulate x
+set.seed(1)
+x <- runif(100, 0, 1)
+lp <- 1 + sin(3 * pi * (x - 0.6)) # true linear predictor (sum XBeta)
+mu <- exp(lp) # poisson mean
+y <- rpois(100, lambda = mu) # simulate y ~ Poisson(mu)
+
+# visualise the true function
+plot(y ~ x, las = 1, pch = 19)
+xrange <- seq(0, 1, length = 1000) # large range to make smooth curve
+mm <- exp(1 + sin(3 * pi * (xrange - 0.6)))
+lines(mm ~ xrange, lwd = 2, col = "red")
+```
+
+Setup the B-splines basis to model
+$$
+\text{log}(\mu_i)=\sum_{j=1}^6\beta_j B_j(x_j)
+$$
+where the $B_j$ are the basis functions. Note here that since we are dealing with generalized models, we no longer assume a linear relationship between the linear predictor and the mean, but model it with the log link function.
+
+```{r}
+library(splines)
+
+# set up B-spline basis matrix 
+BX <- bs(x, df = 6, # 6 basis functions
+         intercept = TRUE # necessary for GAMs
+         )
+
+# set up the negative log-likelihood
+nll <- function(p, x, y, BX) {
+  linp <- BX %*% p # linear predictor eta = BX * beta
+  lam <- exp(linp) # mu = exp(eta)
+  ll <- sum( dpois(y, lambda = lam, log = TRUE)) # log-likelihood
+  return(-ll)
+}
+
+# penalty matrix, intercept not penalized
+P <- diag(6)
+P[1, 1] = 0 # do not penalize the intercept
+# this creates a quadratic penalty (i.e. each beta is squared): t(beta)%*% P %*% Beta
+# this is the basic ridge style penalty
+
+# penalized negative log-likelihood
+pnll <- function(beta, x, y, BX, sp, P) {
+ 
+  pen <- t(beta) %*% P %*% beta
+  pnll <- nll(p = beta, x, y, BX) + 
+    sp * pen # sp = lambda, this lambda* penalty
+  return(pnll)
+}
+
+# optimize using nlm()
+init <- rep(0.5, times = 6) # initialize betas
+(out <- nlm(pnll, p = init, x = x, y = y, BX = BX, 
+            sp = 1, # lambda = 1
+            P = P))
+```
+
+```{r}
+# predict and plot
+bhat <- out$estimate
+lhat <- exp(BX %*% bhat) # estimated log-likelihood
+
+yo <- y[order(x)] # order y by x
+xo <- x[order(x)]
+lhato <- lhat[order(x)] 
+
+plot(yo ~ xo, pch = 19, ylab = "y", xlab = "x", las = 1)
+lines(lhato ~ xo, col = "blue", lwd = 2)
+lines(mm ~ xrange, lwd = 2, col = "red")
+```
+
+Now, let's see if we can make changes/ improvements to this. Specifically, we will be:
+1. Changing from using a B-splines basis to a P-splines basis
+2. Using GCV to find the optimal value of the smoothing parameter, lambda
+3. Describe what would happen if you would also estimate the smoothing parameter, as part of optimizing.
+
+## 1: Changing to P-splines basis
+
+Since P-splines are essentially just B-splines with a penalty, we will amend the code above. Note that since the code already does penalized likelihood estimation, all that is left to do is to change what penalty we use.
+
+```{r}
+k <- ncol(BX)  # number of basis functions
+D <- diff(diag(k), differences = 2)  # 2nd-order differences (P-spline default)
+P_pspline <- t(D) %*% D
+
+
+# optimize using nlm()
+init_pspline <- rep(0.5, times = 6) # initialize betas
+(out_pspline <- nlm(pnll, p = init_pspline, x = x, y = y, BX = BX, 
+            sp = 1, # lambda = 1
+            P = P_pspline))
+
+# we can again get the estimates and plot these
+beta_hat_pspline <- out_pspline$estimate
+lhat_pspline <- exp(BX%*%beta_hat_pspline)
+
+# plot
+yo <- y[order(x)] # order y by x
+xo <- x[order(x)]
+lhato_p <- lhat_pspline[order(x)] 
+
+plot(yo ~ xo, pch = 19, ylab = "y", xlab = "x", las = 1)
+lines(lhato_p ~ xo, col = "blue", lwd = 2)
+lines(mm ~ xrange, lwd = 2, col = "red")
+```
+
+## 2. Solving for Lambda using GCV
+In order to do this, we need to make use of IRLS since the response is no longer linear. Here is a brief description of IRLS.
+
+### What is IRLS (Iteratively Reweighted Least Squares)?
+
+Generalized linear models (GLMs), such as Poisson regression, are nonlinear in the relationship between predictors and the response. As a result, ordinary least squares (OLS) cannot be applied directly. However, GLMs can be locally approximated by weighted least squares. The IRLS algorithm takes advantage of this fact to estimate model parameters.
+
+#### IRLS Algorithm Overview
+
+At each iteration:
+
+1. **Compute the linear predictor**:
+   \[
+   \eta^{(t)} = X \beta^{(t)}
+   \]
+
+2. **Compute the mean response under the inverse link**:
+   \[
+   \mu^{(t)} = g^{-1}(\eta^{(t)})
+   \]
+
+3. **Compute weights and the working response** (based on a first-order Taylor approximation):
+   - For Poisson models:
+     \[
+     W_i = \mu_i
+     \]
+     \[
+     z_i = \eta_i + \frac{y_i - \mu_i}{\mu_i}
+     \]
+
+4. **Solve the weighted least squares problem** with a penalty:
+   \[
+   \beta^{(t+1)} = \arg\min_\beta \left\| W^{1/2}(z - X\beta) \right\|^2 + \lambda \beta^\top P \beta
+   \]
+
+   Which leads to the solution:
+   \[
+   (X^\top W X + \lambda P) \beta = X^\top W z
+   \]
+
+5. **Repeat** until the parameter estimates converge (e.g., change in \(\beta\) is below a threshold).
+
+#### Why IRLS Works
+
+- Each iteration replaces the nonlinear GLM with a locally weighted linear approximation.
+- The "working response" \( z \) and weights \( W \) are updated based on the current fitted values.
+- The algorithm converges to the maximum penalized likelihood estimate.
+
+#### Effective Degrees of Freedom
+
+After convergence, the effective degrees of freedom (edf) can be estimated from the **hat matrix**:
+\[
+H_\lambda = X (X^\top W X + \lambda P)^{-1} X^\top W
+\]
+The edf is given by:
+\[
+\text{edf} = \text{trace}(H_\lambda)
+\]
+
+This is used in the GCV formula for Poisson models:
+\[
+\text{GCV}(\lambda) = \frac{\text{Deviance}}{(n - \text{edf})^2}
+\]
+
+
+
+### Implementing IRLS
+Broadly speaking, the steps are as follows:
+1. Construct the B-spline basis.
+2. Define the P-spline penalty.
+3. Write an IRLS function with penalization.
+4. Loop over smoothing parameters to compute GCV.
+5. Choosing the best $\lambda$ and plotting the final fit.
+
+```{r}
+# 1. Construct the B-spline basis.
+X <- bs(x, df = 20, intercept = TRUE)  # 20 basis functions
+n <- length(y)
+k <- ncol(X)
+
+# 2. Create the P-splines penalty
+D <- diff(diag(k), differences = 2)  # 2nd-order differences
+P <- t(D) %*% D  # Penalty matrix
+
+# 3. Write an IRLS function with penalization.
+fit_poisson_pspline <- function(X, y, P, lambda, tol = 1e-6, maxit = 50) {
+  beta <- rep(0, ncol(X)) # initialise beta
+  
+  for (iter in 1:maxit) {
+    eta <- X %*% beta
+    mu <- exp(eta)
+    
+    # Avoid division by 0
+    mu[mu < 1e-10] <- 1e-10
+    
+    # Weights and working response
+    W <- diag(as.numeric(mu))
+    z <- eta + (y - mu) / mu
+    
+    XtWX <- t(X) %*% W %*% X
+    XtWz <- t(X) %*% W %*% z
+    
+    A <- XtWX + lambda * P
+    b <- XtWz
+    
+    beta_new <- solve(A, b)
+    
+    if (max(abs(beta - beta_new)) < tol) break # check if convergence criteria is met
+    beta <- beta_new
+  }
+  
+  # Final predictions and deviance
+  eta <- X %*% beta
+  mu <- exp(eta)
+  mu[mu < 1e-10] <- 1e-10  # protect log
+  
+  deviance <- 2 * sum(ifelse(y == 0, 0, y * log(y / mu)) - (y - mu))
+  
+  # Effective degrees of freedom
+  H <- X %*% solve(XtWX + lambda * P, t(X) %*% W)
+  edf <- sum(diag(H))
+  
+  return(list(beta = beta, deviance = deviance, edf = edf))
+}
+
+# 4. Loop over smoothing parameters to compute GCV.
+lambda_seq <- seq(0.0001, 20, length.out = 100)
+gcv_values <- numeric(length(lambda_seq))
+
+for (i in seq_along(lambda_seq)) {
+  lambda <- lambda_seq[i]
+  fit <- fit_poisson_pspline(X, y, P, lambda)
+  gcv_values[i] <- fit$deviance / (n - fit$edf)^2
+}
+
+# 5. Choosing the best lambda and plotting the final fit.
+best_lambda <- lambda_seq[which.min(gcv_values)]
+best_fit <- fit_poisson_pspline(X, y, P, best_lambda)
+
+# Predict on a grid
+x_grid <- seq(0, 1, length.out = 500)
+X_grid <- predict(X, newx = x_grid)
+mu_hat <- exp(X_grid %*% best_fit$beta)
+
+# Plot
+plot(y ~ x, pch = 19, col = "gray", las = 1)
+lines(x_grid, mu_hat, col = "blue", lwd = 2)
+lines(x_grid, exp(1 + sin(3 * pi * (x_grid - 0.6))), col = "red", lwd = 2, lty = 2)
+legend("topright", legend = c("Fitted", "True"), col = c("blue", "red"),
+       lty = c(1, 2), bty = "n")
+
+# Optional: GCV plot
+plot(lambda_seq, gcv_values, type = "b", col = "blue", pch = 19,
+     xlab = expression(lambda), ylab = "GCV", main = "GCV for Poisson P-spline")
+# Add vertical line at best lambda
+abline(v = best_lambda, col = "red", lwd = 2, lty = 2)
+
+# Optional: annotate the value
+text(x = best_lambda, 
+     y = min(gcv_values), 
+     labels = sprintf("lamda = %.3f", best_lambda),
+     pos = 4, col = "red")
+```
+### What would happen if you would also estimate the smoothing parameter as part of optimizing?
+
+This question refers to a subtle but important distinction between two ways of estimating the smoothing parameter \( \lambda \) in penalized spline models.
+
+#### What we are currently doing
+
+In our current approach, we use a **two-step (nested) optimization**:
+
+1. We define a grid of smoothing parameters \( \lambda \),
+2. For each fixed \( \lambda \), we use IRLS to estimate the spline coefficients \( \boldsymbol{\beta}_\lambda \) by maximizing the penalized Poisson likelihood,
+3. We compute the GCV score for each model,
+4. We select the value of \( \lambda \) that minimizes the GCV score.
+
+This means we are estimating the smoothing parameter \( \lambda \), but **only after** fitting the model separately at each candidate value. The optimization of \( \lambda \) and \( \beta \) happens in **two separate stages**.
+
+#### What it would mean to estimate the smoothing parameter as part of optimizing
+
+What the question is really asking is: what if we **estimate \( \lambda \) and \( \beta \) simultaneously**, as part of one unified optimization problem?
+
+This is the approach used in more advanced smoothing frameworks like `mgcv::gam()` with `method = "REML"` or `method = "GCV.Cp"`. In these methods:
+
+- \( \lambda \) is treated as an unknown parameter,
+- The algorithm simultaneously updates \( \beta \) and \( \lambda \),
+- This joint optimization is typically done using Newton or quasi-Newton methods,
+- There is no grid search; both sets of parameters are optimized together to directly minimize a criterion like the REML score or marginal GCV.
+
+This approach is more efficient and can be more stable — especially when the model includes multiple smooth terms or when computational resources are limited.
+
+#### Summary
+
+Right now, we estimate the smoothing parameter by looping over values of \( \lambda \), fitting the model at each one, and choosing the best using GCV. If we instead estimate the smoothing parameter as part of the optimization, we would treat \( \lambda \) as an unknown to be optimized jointly with \( \beta \), using a method like REML or marginal likelihood. This would avoid the need for a grid search and could improve efficiency or stability in more complex models.
+
+# Question 1
+
+Note that all of these include an intercept term by default. 
+```{r}
+# load the data
+library(DAAG)
+library(nlme)
+library(mgcv)
+library(ggplot2)
+library(gratia)
+library(visreg)
+rm(list=ls())
+dat <- bomsoi
+```
+
+Recreate the linear model.
+```{r}
+## linear models
+lm_model <- lm(avrain ~ SOI + Year, data = dat)
+
+### Plot partial effects
+visreg(lm_model, "SOI", main = "Linear Effect of SOI")
+visreg(lm_model, "Year", main = "Linear Effect of Year")
+
+## surface
+## Grid of SOI and Year
+soi_seq <- seq(min(dat$SOI), max(dat$SOI), length.out = 100)
+year_seq <- seq(min(dat$Year), max(dat$Year), length.out = 100)
+grid <- expand.grid(SOI = soi_seq, Year = year_seq)
+
+grid$lm_fit <- predict(lm_model, newdata = grid)
+# Reshape into matrix form
+z_lm <- matrix(grid$lm_fit, nrow = 100, byrow = FALSE)
+
+# Plot linear model surface
+persp(soi_seq, year_seq, z_lm,
+      theta = 35, phi = 30, col = "skyblue", border = NA,
+      xlab = "SOI", ylab = "Year", zlab = "Fitted Rainfall",
+      main = "Linear Model Surface")
+```
+
+Recreate the additive gam model.
+```{r}
+## Additive model
+gam_additive <- gam(avrain ~ s(SOI) + s(Year), data = dat)
+# recall that s() by default fits a penalized thin plate regression spline
+
+# Plot the marginal smooths
+visreg(gam_additive, "SOI", main = "Smooth Effect of SOI")
+visreg(gam_additive, "Year", main = "Smooth Effect of Year")
+# plot the surface:
+
+
+## predict over grid
+grid$gam_fit <- predict(gam_additive, newdata = grid)
+z_gam <- matrix(grid$gam_fit, nrow = 100, byrow = FALSE)
+## Plot GAM smooth additive surface
+persp(year_seq, soi_seq, z_gam,
+      theta = 35, phi = 30, col = "tomato", border = NA,
+      xlab = "SOI", ylab = "Year", zlab = "Fitted Rainfall",
+      main = "Additive GAM Surface")
+```
+Recreate the tensor product curve.
+```{r}
+## tensor product spline
+gam_tensor <- gam(avrain ~ te(SOI, Year), data = dat)
+
+# Plot the 3D surface
+vis.gam(gam_tensor, view = c("SOI", "Year"), 
+        plot.type = "persp", color = "topo", theta = 35, phi = 30)
+```
+
+## Part 2: Backfitting algorithm
+Note the use of smooth.spline: this is a standalone function that is a non-parametric smoother for one variable at a time. s() would not be suited here since it fits into a larger family of modeling functions in mgcv::gam() that includes optimization, parameter selection, etc.
+
+Further note that the following algorithm works because again, $y_i$ is linear in the predictors and we can subtract the estimates of one smooth to calculate the residuals. This would not hold if $y_i$ were not linear.
+
+### Backfitting Algorithm for a GAM with Identity Link
+
+We want to fit the following additive model:
+
+\[
+y_i = \beta_0 + f_1(x_{1i}) + f_2(x_{2i}) + \varepsilon_i
+\]
+
+The backfitting algorithm estimates the additive functions \( f_1 \) and \( f_2 \) iteratively by holding one fixed while updating the other using a smoother (e.g., `smooth.spline()`).
+
+#### Algorithm Steps:
+
+1. **Initialize:**
+   - Set \( \hat{f}_1^{(0)} = 0 \), \( \hat{f}_2^{(0)} = 0 \),
+   - Set \( \hat{\beta}_0 = \bar{y} \)
+
+2. **Repeat until convergence:**
+
+   a. **Update \( f_1 \):**
+   - Compute partial residuals:
+     \[
+     r_1 = y - \hat{\beta}_0 - \hat{f}_2^{(t)}
+     \]
+   - Fit a smoothing spline to \( (x_1, r_1) \) using `smooth.spline()` to obtain \( \hat{f}_1^{(t+1)} \)
+
+   b. **Update \( f_2 \):**
+   - Compute partial residuals:
+     \[
+     r_2 = y - \hat{\beta}_0 - \hat{f}_1^{(t+1)}
+     \]
+   - Fit a smoothing spline to \( (x_2, r_2) \) using `smooth.spline()` to obtain \( \hat{f}_2^{(t+1)} \)
+
+   c. **Re-center the smooths (optional but recommended):**
+   - Subtract the mean from each function to ensure identifiability:
+     \[
+     \hat{f}_j \leftarrow \hat{f}_j - \frac{1}{n} \sum_{i=1}^n \hat{f}_j(x_{ji})
+     \]
+   - Update the intercept:
+     \[
+     \hat{\beta}_0 = \bar{y} - \bar{f}_1 - \bar{f}_2
+     \]
+
+3. **Check for convergence:**
+   - Stop when the maximum change in either \( f_1 \) or \( f_2 \) is below a chosen threshold.
+
+This algorithm only applies when the model uses the identity link (i.e., a Gaussian response). For Poisson or other families, a generalized backfitting or IRLS algorithm would be needed.
+
+```{r}
+backfitting_manual <- function(y, x1, x2, tol = 0.0001, maxiter = 50){
+  # initialise values
+  f_1_hat <- 0
+  f_2_hat <- 0
+  beta_0_hat <- mean(y)
+  
+  for(i in 1:maxiter){
+    # partial residuals for f1
+    r_1 <- y- beta_0_hat - f_1_hat
+    # fit a smooth spline
+    smooth_f1 <- smooth.spline(x1, r_1)
+    # obtain the fitted values
+    f_1_hat_new <- smooth_f1$y 
+    
+    # partial residuals for f2
+    r_2 <- y - beta_0_hat - f_1_hat_new
+    # fit a smooth spline
+    smooth_f2 <- smooth.spline(x2, r_2)
+    # obtain the fitted values
+    f_2_hat_new <- smooth_f2$y
+    
+    # recenter both smooths:
+    f_1_hat_new <- f_1_hat_new - mean(f_1_hat_new)
+    f_2_hat_new <- f_2_hat_new - mean(f_2_hat_new)
+    # update intercept
+    beta_0_new <- mean(y) - mean(f_1_hat_new) - mean(f_2_hat_new)
+    
+    # check if convergence criteria is met:
+    if(max(abs(f_1_hat_new - f_1_hat)) < tol &&
+   max(abs(f_2_hat_new - f_2_hat)) < tol)
+{
+      message("Converged in ", i, " iterations.")
+      break
+    }
+    # update the estimates
+    f_1_hat <- f_1_hat_new
+    f_2_hat <- f_2_hat_new
+    beta_0_hat <- beta_0_new
+
+  }
+  return(list(beta_0_hat = beta_0_hat, 
+              f_1_hat = f_1_hat,
+              f_2_hat = f_2_hat))
+}
+
+fit <- backfitting_manual(y = dat$avrain, x1 = dat$SOI, x2 = dat$Year)
+
+# Plot fitted effects
+plot(dat$SOI, fit$f_1_hat, main = "Estimated f1(SOI)", pch = 19)
+plot(dat$Year, fit$f_2_hat, main = "Estimated f2(Year)", pch = 19)
+
+```
+
+# Question 2
+Explore the ‘gam’ function in ‘mgcv’. This is important, because when we write up our methods for an analysis we need to state exactly what settings were used (in case somebody else wants to replicate this in some other software package, e.g. SAS).
+
+1. What happens if I add an $s(x)$ term to a model? 
+$s(x)$ will fit (by default) a thin-plate penalized regression spline to the predictor, $x$.
+
+2. How are knots selected?
+From the 'gam' help file, click on the link to 'tprs' in the 'knots' section to get this explanation:
+Thin plate regression splines are constructed by starting with the basis and penalty for a full thin plate spline and then truncating this basis in an optimal manner, to obtain a low rank smoother. Details are given in Wood (2003). One key advantage of the approach is that it avoids the knot placement problems of conventional regression spline modelling, but it also has the advantage that smooths of lower rank are nested within smooths of higher rank, so that it is legitimate to use conventional hypothesis testing methods to compare models based on pure regression splines. Note that the basis truncation does not change the meaning of the thin plate spline penalty (it penalizes exactly what it would have penalized for a full thin plate spline).
+
+The t.p.r.s. basis and penalties can become expensive to calculate for large datasets. For this reason the default behaviour is to randomly subsample max.knots unique data locations if there are more than max.knots such, and to use the sub-sample for basis construction. The sampling is always done with the same random seed to ensure repeatability (does not reset R RNG). max.knots is 2000, by default. Both seed and max.knots can be modified using the xt argument to s. Alternatively the user can supply knots from which to construct a basis.
+
+3. What type of basis is chosen?
+By default, bs="tp", i.e. a thin plate basis is used.
+
+4. Are the terms penalized?
+By default, fx = FALSE, thus a penalized regression spline is fit, so yes, the terms are penalized.
+
+5. What algorithm is used to fit the model (default)?
+On gam help file scroll down to the details section:
+The algorithm is penalized likelihood maximization solved by Penalized Iteratively Re-weighted Least Squares (P-IRLS, see Wood 2000).
+
+Details of the default underlying fitting methods are given in Wood (2011, 2004) and Wood, Pya and Saefken (2016). Some alternative methods are discussed in Wood (2000, 2017).
+
+6. How does penalization work? 
+Again, scroll down to the details section for the gam help file:
+Broadly gam works by first constructing basis functions and one or more quadratic penalty coefficient matrices for each smooth term in the model formula, obtaining a model matrix for the strictly parametric part of the model formula, and combining these to obtain a complete model matrix (/design matrix) and a set of penalty matrices for the smooth terms. The linear identifiability constraints are also obtained at this point. The model is fit using gam.fit, gam.fit3 or variants, which are modifications of glm.fit. The GAM penalized likelihood maximization problem is solved by Penalized Iteratively Re-weighted Least Squares (P-IRLS) (see e.g. Wood 2000). Smoothing parameter selection is possible in one of three ways. (i) ‘Performance iteration’ uses the fact that at each P-IRLS step a working penalized linear model is estimated, and the smoothing parameter estimation can be performed for each such working model. Eventually, in most cases, both model parameter estimates and smoothing parameter estimates converge. This option is available in bam and gamm. (ii) Alternatively the P-IRLS scheme is iterated to convergence for each trial set of smoothing parameters, and GCV, UBRE or REML scores are only evaluated on convergence - optimization is then ‘outer’ to the P-IRLS loop: in this case the P-IRLS iteration has to be differentiated, to facilitate optimization, and gam.fit3 or one of its variants is used in place of gam.fit. (iii) The extended Fellner-Schall algorithm of Wood and Fasiolo (2017) alternates estimation of model coefficients with simple updates of smoothing parameters, eventually approximately maximizing the marginal likelihood of the model (REML). gam uses the second method, outer iteration, by default.
+
+7. How can you determine the amount of penalization? 
+I think you can look at the object output and the 'sp' element:
+sp- estimated smoothing parameters for the model. These are the underlying smoothing parameters, subject to optimization. For the full set of smoothing parameters multiplying the penalties see full.sp. Divide the scale parameter by the smoothing parameters to get, variance components, but note that this is not valid for smooths that have used rescaling to improve conditioning.
+
+8. What is the sp parameter?
+A vector of smoothing parameters can be provided here. Smoothing parameters must be supplied in the order that the smooth terms appear in the model formula. Negative elements indicate that the parameter should be estimated, and hence a mixture of fixed and estimated parameters is possible. If smooths share smoothing parameters then length(sp) must correspond to the number of underlying smoothing parameters.
+
+9. Can you get to the penalty matrices using the option fit = FALSE?
+Yes, fit it and then get the value 'S' from the output object.
+
+10. Does it use penalized IRWLS? Does it use a backfitting algorithm?
+IRWLS.
+
+11. In the summary output, what are edf? (?summary.gam)
+array of estimated degrees of freedom for the model terms.
+
+
+12. How can you fit terms that are not penalized?
+In s(x), specify fx = TRUE.

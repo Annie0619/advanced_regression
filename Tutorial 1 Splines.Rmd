@@ -1207,7 +1207,7 @@ D <- diff(diag(k), differences = 1)  # 1st-order differences
 P <- t(D) %*% D
 
 # 2. Lambda values
-## note you cannot have lambda = 0, since this causes linear dependence and rand deficiency in x_aug later on!
+## note you cannot have lambda = 0, since this causes linear dependence and rank deficiency in x_aug later on!
 lambda <- c(0.0001, 0.1, 0.5, 1, 5, 10)
 coeff_list <- list()
 
