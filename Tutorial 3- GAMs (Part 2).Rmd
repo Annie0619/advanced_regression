@@ -1,0 +1,305 @@
+---
+title: "Tutorial 3- GAMs (Part 2)"
+author: "Andomei Smit: SMTAND051"
+date: "16/05/2025"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 2
+    fig_caption: true
+    keep_tex: yes
+---
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.pos = 'H')
+library(splines)
+library(nlme)
+library(mgcv)
+```
+
+# IRLS- Exponential Example
+
+See code in tut and some basic maths in written form.
+
+# Question 4: Simulate Splines
+
+Simulate some data:
+```{r}
+set.seed(42)
+x <- seq(0, 2*pi, by = 0.1)
+y <- sin(x) + rnorm(length(x), 0, sd = sd(sin(x) / 2))
+plot(y ~ x, las = 1)
+```
+
+Simulate some splines.
+
+```{r}
+# Basis setup
+B <- bs(x, df = 10, intercept = TRUE)
+
+# Simulate and plot 15 random spline functions
+set.seed(1)
+matplot(x, sapply(1:15, function(i) {
+  beta <- rnorm(ncol(B), mean = 0, sd = 1)
+  B %*% beta
+}), type = "l", lty = 1, col = rainbow(15), 
+main = "Simulated Splines from N(0, 1)", ylab = "f(x)", xlab = "x")
+
+```
+Obtain the Covariance matrix for the fitted spline (mgcv) coefficients, and simulate 10 to 20 splines.
+
+```{r}
+model <- gam(y ~ s(x))
+vcov(model)  # returns covariance matrix of all coefficients
+```
+
+```{r}
+df <- data.frame(x = x, y = y)
+set.seed(1)
+mod <- gam(y ~ s(x, k = 10), data = df)
+
+# Design matrix for prediction
+Xp <- predict(mod, newdata = df, type = "lpmatrix")
+
+# Extract estimated coefficients and covariance matrix
+beta_hat <- coef(mod)
+Vb <- vcov(mod)
+
+# Simulate 20 beta draws from posterior
+beta_sim <- MASS::mvrnorm(20, mu = beta_hat, Sigma = Vb)
+
+# Compute fitted splines for each draw
+fitted_draws <- Xp %*% t(beta_sim)
+
+# Plot
+matplot(x, fitted_draws, type = "l", lty = 1, col = rainbow(20),
+        ylab = "f(x)", xlab = "x", main = "Posterior Simulated Splines")
+lines(x, predict(mod, newdata = df), col = "black", lwd = 2)
+legend("topright", legend = "Fitted spline", col = "black", lwd = 2, bty = "n")
+```
+
+# Question 5: mcycle
+
+Fit a spline using s(x) in gam then try to reproduce it from scratch.
+
+```{r}
+library(MASS)
+rm(list=ls())
+df <- mcycle
+plot(df$times, df$accel)
+```
+## Fit using gam
+
+```{r}
+mod_auto <- gam(accel ~ s(times), data = df)
+x_grid <- seq(min(df$times), max(df$times), length.out = 500)
+new_df <- data.frame(times = x_grid)
+y_plot_auto <- predict(mod_auto, newdata = new_df)
+
+plot(df$times, df$accel, pch = 19, col = "gray", main = "GAM fit")
+lines(df$times[order(df$times)], predict(mod_auto)[order(df$times)], col = "blue", lwd = 2)
+```
+
+## Construct from scratch
+I will assume we can get the number of knots from above as wells as smoothing parameter.
+```{r}
+# value of lambda
+lamda <- mod_auto$sp
+
+# extract the penalty matrix:
+mod_auto_no_fit <- gam(accel ~ s(times), data = df, fit = FALSE)
+P <- mod_auto_no_fit$S # penalty matrix
+
+# determine the number of knots by the number of beta coeff
+k <- length(mod_auto$coefficients) -1 # 9 (ignoring the intercept)
+
+# THIS IS FROM GPT AND I STILL NEED TO CHECK IT WITH BIRGIT
+
+# Define the smooth spec manually
+spec <- mgcv:::interpret.gam(accel ~ s(times))$smooth.spec[[1]]
+
+# Construct the smooth manually
+smooth_obj <- mgcv:::smooth.construct.tp.smooth.spec(spec, data = df, knots = NULL)
+
+# Extract the basis matrix and penalty
+X_manual <- smooth_obj$X         # basis matrix
+S_manual <- smooth_obj$S[[1]]    # penalty matrix
+
+# stopped here
+```
+
+# Question 6
+Explore different penalizations.
+
+## 1. Penalization in `gam()` via `s()`
+
+The `s()` function in the `mgcv` package constructs a smooth term. By default, it uses **thin plate regression splines** unless another basis is specified (e.g., `bs = "ps"` for P-splines).
+
+---
+
+## 2. Key Arguments That Affect Penalization
+
+| Argument     | Description                                                                 | Penalization Role                                                                                                   |
+|--------------|-----------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------|
+| `sp`         | **Smoothing parameter** (or vector of smoothing parameters).                | Controls tradeoff between fit and smoothness. Higher `sp` = more smoothing (greater penalty on wiggliness).         |
+| `lambda`     | Same concept as `sp`, just under a different name (e.g., in theory notes).  | In `mgcv`, you mostly set/see `sp`, which corresponds to `lambda` in standard penalized regression notation.        |
+| `df` / `k`   | Rank of the smoother (degrees of freedom). Default `k = 10`.                | Sets the **maximum complexity** of the smooth. Actual EDF will usually be < `k` and determined via `sp`.             |
+| `knots`      | Locations of basis function knots.                                           | Relevant if using basis like `"ps"` or `"cr"` splines. Controls where basis functions are centered.                |
+| `fx = TRUE`  | Fit with **no penalty** (fixed degrees of freedom).                         | Forces the smoother to use the maximum basis space with no smoothing penalty. Useful for fixed-effect modeling.     |
+| `H`          | A **user-defined penalty matrix**.                                           | Advanced: Allows full control over penalization. Used for custom penalties outside default setup.                   |
+
+---
+
+## 3. Mathematical Formulation
+
+In penalized regression splines, the fitting minimizes:
+
+\[
+\| y - X\beta \|^2 + \lambda \beta^\top P \beta
+\]
+
+Where:
+- \( \lambda \) = smoothing parameter (`sp`)
+- \( P \) = penalty matrix (`S` in `gam` model objects)
+- \( X \) = basis matrix (depends on `k`, `knots`, etc.)
+- `fx = TRUE` sets \( \lambda = 0 \)
+
+---
+
+## 4. Practical Comparison Table
+
+| Scenario                       | Penalized? | How it's Controlled                          | Notes                                                                 |
+|-------------------------------|------------|----------------------------------------------|-----------------------------------------------------------------------|
+| `s(x)`                        | Yes         | `sp` chosen via GCV/REML                      | Default smooth with automatic smoothing parameter selection.         |
+| `s(x, fx = TRUE)`             | No        | No penalty                                   | Used when you want to treat smooth as fixed parametric term.         |
+| `s(x, sp = 0.1)`              | Yes        | Manual smoothing parameter                   | Override automatic selection.                                         |
+| `s(x, k = 20)`                | Yes        | Sets basis dimension                         | Controls **maximum complexity**; smoothing still estimated.          |
+| `s(x, bs = "ps", knots = ...)`| Yes       | Knot positions specified                     | Useful for control over basis locations (especially with P-splines). |
+| `s(x, H = custom_penalty)`    | Yes        | Fully custom penalty matrix                  | Rarely needed but very flexible.                                      |
+
+---
+
+## 5. Summary Guidelines
+
+- **Use `sp`** to directly control the amount of smoothing (penalty).
+- **Use `k`** (degrees of freedom) to control the complexity limit of the smoother.
+- **Use `fx = TRUE`** to turn **off** penalization (equivalent to an unpenalized spline).
+- **Use `H`** if you want to define your own penalty (advanced use).
+- **Use `knots`** if you want to influence the shape/location of the basis.
+
+---
+
+# Question 7
+
+```{r}
+library(gamair)
+rm(list = ls())
+data(cairo)
+attach(cairo)
+plot(time, temp)
+```
+
+In order to account for long term trend, we will include an intercept term and trend term.
+
+```{r}
+# this is what I had originally:
+#mod <- gam(temp ~ time + s(time) + s(day.of.year, bs = "cc"), intercept = TRUE)
+
+# but the term 'time' is redundant since s(time) already has a linear component included.
+# the intercept = TRUE term is also redundant and ignored since the intercept is included by default.
+# apparently using "REML" for optimization gives better results
+# improved version:
+
+# Fit the model
+mod <- gam(temp ~ s(time) + s(day.of.year, bs = "cc"), data = cairo, method = "REML")
+
+summary.gam(mod)
+
+# Get predictions and standard errors
+pred <- predict(mod, se.fit = TRUE)
+
+# Calculate 95% confidence interval
+upper <- pred$fit + 2 * pred$se.fit
+lower <- pred$fit - 2 * pred$se.fit
+# note: if this was from the poisson dbn, we would need to use exp(upper) to get to the actual CI band
+
+# Plot
+plot(cairo$time, cairo$temp, pch = 19, cex = 0.4,
+     main = "Temperature with Fitted Trend and 95% CI",
+     xlab = "Time", ylab = "Temperature")
+lines(cairo$time, pred$fit, col = "red", lwd = 2)
+lines(cairo$time, upper, col = "blue", lty = "dashed")
+lines(cairo$time, lower, col = "blue", lty = "dashed")
+
+```
+
+# Question 8
+Use the functions in mgcv to estimate the following surface. Try tensor product and thin-plate splines.
+
+```{r}
+set.seed(1)
+surface <- gamSim(eg = 2, n = 500, dist = "normal", scale = 0.1, verbose = TRUE)
+```
+
+## Thin-plate spline
+
+```{r}
+thin_plate_mod <- gam(y ~ s(x, z), data = surface$data)
+```
+## Tensor Product
+
+```{r}
+tensor_prod_mod <- gam(y ~ te(x, z), method = "REML", data = surface$data)
+summary(tensor_prod_mod)
+```
+## Visualise
+
+```{r}
+# Create prediction grid
+x_grid <- seq(min(surface$data$x), max(surface$data$x), length = 50)
+z_grid <- seq(min(surface$data$z), max(surface$data$z), length = 50)
+grid <- expand.grid(x = x_grid, z = z_grid)
+
+# Predict using each model
+pred_tp <- matrix(predict(thin_plate_mod, newdata = grid), 50, 50)
+pred_te <- matrix(predict(tensor_prod_mod, newdata = grid), 50, 50)
+
+# 3D Plot: Thin Plate
+persp(x_grid, z_grid, pred_tp,
+      theta = 45, phi = 30, expand = 0.6,
+      col = "lightblue", ticktype = "detailed",
+      main = "Thin Plate Spline: s(x, z)",
+      xlab = "x", ylab = "z", zlab = "y")
+
+# 3D Plot: Tensor Product
+persp(x_grid, z_grid, pred_te,
+      theta = 45, phi = 30, expand = 0.6,
+      col = "lightgreen", ticktype = "detailed",
+      main = "Tensor Product Spline: te(x, z)",
+      xlab = "x", ylab = "z", zlab = "y")
+```
+
+Plot original surface.
+
+```{r}
+library(akima)  # for interpolation
+
+# Interpolate the true surface (f) onto a regular grid
+interp_f <- with(surface, akima::interp(surface$data$x, surface$data$z, surface$data$f, 
+       xo = seq(min(surface$data$x), max(surface$data$x), length = 50),  yo = seq(min(surface$data$z), max(surface$data$z), length = 50)))
+
+# Plot using persp
+persp(interp_f$x, interp_f$y, interp_f$z,
+      theta = 45, phi = 30, expand = 0.6,
+      col = "orange", ticktype = "detailed",
+      xlab = "x", ylab = "z", zlab = "f",
+      main = "True Surface from gamSim")
+```
+
+## How to determine which model is better:
+1. Predictive accuracy: look how far the fitted values are from the actual values
+2. GCV: lower = better
+3. Explained Deviance (pseudo R2): higher = better, closer to 1 is the goal
+4. Visual fit: does one surface look like it is better approximating the shape of the data
+5. Effective degrees of freedom: are they under- or overfitting. A higher edf means the fit is more complex/ wiggly. If edf is approx 1, the fit is almost linear. If the edf is approx k-1 (the dimension of the basis), it uses almost all the flexibility of the smoother.
