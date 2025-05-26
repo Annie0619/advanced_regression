@@ -1,0 +1,157 @@
+---
+title: "Tutorial 4- MARS"
+author: "Andomei Smit: SMTAND051"
+date: "16/05/2025"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 2
+    fig_caption: true
+    keep_tex: yes
+---
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.pos = 'H')
+library(Formula)
+library(plotmo)
+library(plotrix)
+library(earth)
+library(viridisLite)
+library(viridis)
+```
+
+# Question 1
+Exploring the earth() function using the spam data.
+
+```{r}
+rm(list=ls())
+spam <- read.csv("spambase.data", header = F)
+# assume the last variable is the binary indictor if the email is spam
+
+?earth
+# penalty: how the model is penalized during GCV. Default/ recommendation: if degree (interactions) = 1: penalty =2. If degree >1, penalty = 3. The thing being penalized is the number of knots and the number of terms.
+
+# degree: degree of interaction allowed. 1 = no interaction (additive model), 2 = 2 way etc. Default is 1.
+
+# nk: max number of model terms before pruning (i.e. max terms created by forward selection). It could stop before this if other stopping criteria is met
+
+# thresh: forward selection stopping criteria (if the reduction in RSS does not exceed this amount, stop)
+
+# pmethod: pruning method.
+
+# nprune: max number of terms (including intercept) in the pruned model. Default is NULL, ie. all terms from forward pass.
+
+# then from the returned object:
+colnames(spam)[58] <- "spam_ind"
+spam.earth.mod <- earth(spam_ind~ ., data = spam, degree =2, glm = list(family = binomial))
+plotmo(spam.earth.mod, nrug = TRUE)
+summary(spam.earth.mod, digits = 2)
+
+# rss: Residual sum-of-squares (RSS) of the model (summed over all responses, if y has multiple columns).
+
+# rsq: 1-rss/tss. R-Squared of the model (calculated over all responses, and calculated using the weights argument if it was supplied). A measure of how well the model fits the training data. Note that tss is the total sum-of-squares, sum((y - mean(y))^2).
+
+# gcv: 	Generalized Cross Validation (GCV) of the model (summed over all responses). The GCV is calculated using the penalty argument. For details of the GCV calculation, see equation 30 in Friedman's MARS paper and earth:::get.gcv.
+
+# grqs: 1-gcv/gcv.null. An estimate of the predictive power of the model (calculated over all responses, and calculated using the weights argument if it was supplied). gcv.null is the GCV of an intercept-only model. See “Can GRSq be negative?” in the vignette.
+
+# bx: Matrix of basis functions applied to x. Each column corresponds to a selected term. Each row corresponds to a row in the input matrix x, after taking subset. See model.matrix.earth for an example of bx handling.
+
+# fitting a GAM model here would be really time consuming as we would have to first see which variables are important and compare so many different models.
+```
+
+# Question 2
+Write a function to construct the basis for a MARS model, given a single predictor variable X. Illustrate these functions. 
+
+```{r}
+# first create a function to make the truncated power basis
+right_pair <- function(x, knot) {
+  tb <- ifelse(x > knot, x - knot, 0)
+  return(tb)
+}
+
+left_pair <- function(x, knot) {
+  tb <- ifelse(knot > x, knot - x, 0)
+  return(tb)
+}
+```
+
+
+```{r}
+construct_mars_basis <- function(y, x, maxknots = 10, 
+       method = "GCV"){ # add option to choose GCV or AIC or BIC
+  X <- matrix(1, nrow = length(x)) # just the intercept
+  colnames(X) <- "intercept"
+  
+  # create vector to store knot placement:
+  knots <- c()
+  colnames_list <- c("intercept")
+  
+  for (j in 1:maxknots) {
+    rss <- rep(Inf, length(x)) # store rss for each pair of hinge functions
+    for (i in 1:length(x)) {
+      if (x[i] %in% knots) next # skip knots already used
+      # create the new pair for hinge functions
+      x_right_hinge <- right_pair(x, x[i])
+      x_left_hinge <- left_pair(x, x[i])
+      
+      # fit each pair simultaneously and calculate RSS
+      model <- lm(y ~ X + x_right_hinge + x_left_hinge)
+      rss[i] <- sum(resid(model)^2)
+    }
+    # select the knot that reduced the RSS the most (the smallest residual/ left over component)
+    new_knot <- which.min(rss)
+    
+    # add it to the list of knots
+    knots <- c(knots, x[new_knot])
+    
+    # add this pair of hinge functions to the basis
+    new_x_right <- right_pair(x, x[new_knot])
+    new_x_left <- left_pair(x, x[new_knot])
+    X <- cbind(X, new_x_right, new_x_left)
+    
+    # Format knot value to 3 decimal places for column names
+    knot_str <- format(round(new_knot, 1), nsmall = 1)
+    colnames_list <- c(colnames_list,
+                       paste0("right_", knot_str),
+                       paste0("left_", knot_str))
+  }
+  
+  # rename the columns
+  colnames(X) <- colnames_list
+  return(list(knots= knots, basis = X))
+}
+```
+
+Apply these to a sample set of data:
+```{r}
+# example data:
+set.seed(2020)
+x <- runif(100)
+y = 5 + sin(3 * pi * (x - 0.6)) + rnorm(100, 0, 0.3)
+par(mfrow = c(3, 3), mar = c(4, 4, 0.5, 0.5))
+plot(y ~ x, pch = 19, las = 1 )
+abline(lm(y ~ x), col = "green4", lwd = 3)
+
+# if you wanted to view these functions:
+xp <- seq(min(x), max(x), length = 1000)
+
+# Create 2 × number of knots colors using viridis
+colors <- viridis(2 * length(test_knots))
+
+# Plot the intercept function (constant 1)
+plot(rep(1, length(xp)) ~ xp, type = "l", col = "black", lwd = 2, ylim = c(0, 1.5),
+     ylab = "Basis value", xlab = "x", main = "Hinge Basis Functions (Viridis)")
+
+# Plot each hinge function (left and right) in a unique color
+for (i in seq_along(test_knots)) {
+  lines(left_pair(xp, test_knots[i]) ~ xp, col = colors[2 * i - 1], lwd = 2, lty = 1)
+  lines(right_pair(xp, test_knots[i]) ~ xp, col = colors[2 * i],     lwd = 2, lty = 2)
+}
+```
+
+# Question 3
+
+## Scenario 1
+
